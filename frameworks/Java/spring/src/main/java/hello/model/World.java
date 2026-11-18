@@ -1,24 +1,26 @@
 package hello.model;
 
-import javax.persistence.Entity;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
+import org.springframework.data.relational.core.mapping.Column;
+import org.springframework.data.relational.core.mapping.Table;
 
 @Document
-@Entity
+@Table
 public final class World {
 
-  @Id
-  @javax.persistence.Id
-  public int id;
-  @Field("randomNumber")
-  public int randomnumber;
+	@Id
+	public int id;
 
-  protected World() {}
+	@Field("randomNumber")
+	@Column("randomnumber")
+	public int randomNumber;
 
-  public World(int id, int randomnumber) {
-    this.id = id;
-    this.randomnumber = randomnumber;
-  }
+
+	public World(int id, int randomNumber) {
+		this.id = id;
+		this.randomNumber = randomNumber;
+	}
+
 }

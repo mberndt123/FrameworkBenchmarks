@@ -1,12 +1,26 @@
-FROM ruby:2.4
+FROM ruby:4.0
+
+ENV RUBY_YJIT_ENABLE=1
+ENV RUBY_MN_THREADS=1
+
+# Use Jemalloc
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libjemalloc2
+ENV LD_PRELOAD=libjemalloc.so.2
 
 ADD ./ /sinatra
 WORKDIR /sinatra
 
-RUN bundle install --jobs=4 --gemfile=/sinatra/Gemfile --path=/sinatra/sinatra/bundle
+ENV BUNDLE_WITH=postgresql:puma
+RUN bundle install --jobs=4 --gemfile=/sinatra/Gemfile
 
+ENV APP_ENV=production
 ENV DBTYPE=postgresql
+
+ENV MIN_THREADS=5
+ENV MAX_THREADS=5
 
 EXPOSE 8080
 
-CMD bundle exec puma -C config/mri_puma.rb -b tcp://0.0.0.0:8080 -e production
+CMD export WEB_CONCURRENCY=$(($(nproc)*5/4)) && \
+    bundle exec puma -b tcp://0.0.0.0:8080

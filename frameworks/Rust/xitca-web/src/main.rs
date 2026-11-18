@@ -1,115 +1,125 @@
+#[cfg(feature = "perf-allocator")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod db;
+mod db_pool;
 mod ser;
 mod util;
 
-use std::{
-    error::Error,
-    future::ready,
-    io,
-    sync::{Arc, Mutex},
+use xitca_http::{
+    HttpServiceBuilder,
+    body::Once,
+    bytes::Bytes,
+    h1::RequestBody,
+    http::{
+        self, HeaderValue, IntoResponse as _, RequestExt, StatusCode,
+        const_header_value::{JSON, TEXT_HTML_UTF8, TEXT_UTF8},
+        header::{CONTENT_TYPE, SERVER},
+    },
+    util::{
+        middleware::context::{Context, ContextBuilder},
+        service::{
+            route::get,
+            router::{Router, RouterError},
+        },
+    },
 };
+use xitca_service::{Service, ServiceExt, fn_service};
 
-use bytes::Bytes;
-use xitca_http::http::{
-    header::{CONTENT_TYPE, SERVER},
-    Method,
-};
-use xitca_web::{dev::fn_service, request::WebRequest, App, HttpServer};
+use ser::{HELLO, Message};
+use util::{HandleResult, QueryParse};
 
-use self::db::Client;
-use self::util::{
-    internal, json, json_response, not_found, plain_text, AppState, HandleResult, QueryParse,
-};
+type Request<B> = http::Request<RequestExt<B>>;
 
-type State = AppState<Client>;
+type Response = http::Response<Once<Bytes>>;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
-    let config = "postgres://benchmarkdbuser:benchmarkdbpass@tfb-database/hello_world";
+type Ctx<'a> = Context<'a, Request<RequestBody>, db_pool::Client>;
 
-    let cores = core_affinity::get_core_ids().unwrap_or_else(Vec::new);
-    let cores = Arc::new(Mutex::new(cores));
-
-    HttpServer::new(move || {
-        App::with_async_state(move || async move {
-            let client = db::create(config).await;
-            AppState::new(client)
+fn main() -> std::io::Result<()> {
+    let service = Router::new()
+        .insert(
+            "/plaintext",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, _) = ctx.into_parts();
+                let mut res = req.into_response(const { Bytes::from_static(HELLO.as_bytes()) });
+                res.headers_mut().insert(CONTENT_TYPE, TEXT_UTF8);
+                Ok(res)
+            })),
+        )
+        .insert(
+            "/json",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, _) = ctx.into_parts();
+                json_response(req, Message::HELLO)
+            })),
+        )
+        .insert(
+            "/db",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, cli) = ctx.into_parts();
+                cli.db().await.and_then(|w| json_response(req, &w))
+            })),
+        )
+        .insert(
+            "/fortunes",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, cli) = ctx.into_parts();
+                let fortunes = cli.fortunes().await?.render_once()?;
+                let mut res = req.into_response(Bytes::from(fortunes));
+                res.headers_mut().insert(CONTENT_TYPE, TEXT_HTML_UTF8);
+                Ok(res)
+            })),
+        )
+        .insert(
+            "/queries",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, cli) = ctx.into_parts();
+                let num = req.uri().query().parse_query();
+                cli.queries(num).await.and_then(|w| json_response(req, &w))
+            })),
+        )
+        .insert(
+            "/updates",
+            get(fn_service(async |ctx: Ctx| {
+                let (req, cli) = ctx.into_parts();
+                let num = req.uri().query().parse_query();
+                cli.updates(num).await.and_then(|w| json_response(req, &w))
+            })),
+        )
+        .enclosed(ContextBuilder::new(db_pool::Client::create))
+        .enclosed_fn(async |service, req| {
+            let mut res = service.call(req).await.unwrap_or_else(error_handler);
+            res.headers_mut().insert(SERVER, HeaderValue::from_static("x"));
+            Ok::<_, core::convert::Infallible>(res)
         })
-        .service(fn_service(handle))
-    })
-    .force_flat_buf()
-    .max_request_headers::<8>()
-    .on_worker_start(move || {
-        if let Some(core) = cores.lock().unwrap().pop() {
-            core_affinity::set_for_current(core);
+        .enclosed(HttpServiceBuilder::h1().io_uring());
+    xitca_server::Builder::new()
+        .bind("xitca-web", "0.0.0.0:8080", service)?
+        .build()
+        .wait()
+}
+
+#[cold]
+#[inline(never)]
+fn error_handler(e: RouterError<util::Error>) -> Response {
+    let status = match e {
+        RouterError::Match(_) => StatusCode::NOT_FOUND,
+        RouterError::NotAllowed(_) => StatusCode::METHOD_NOT_ALLOWED,
+        RouterError::Service(e) => {
+            eprintln!("Internal Error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
         }
-        ready(())
-    })
-    .bind("0.0.0.0:8080")?
-    .run()
-    .await
+    };
+    http::Response::builder()
+        .status(status)
+        .body(Once::new(Bytes::new()))
+        .unwrap()
 }
 
-async fn handle(req: &mut WebRequest<'_, State>) -> HandleResult {
-    let inner = req.request_mut();
-
-    match (inner.method(), inner.uri().path()) {
-        (&Method::GET, "/plaintext") => plain_text(req),
-        (&Method::GET, "/json") => json(req),
-        (&Method::GET, "/db") => db(req).await,
-        (&Method::GET, "/fortunes") => fortunes(req).await,
-        (&Method::GET, "/queries") => queries(req).await,
-        (&Method::GET, "/updates") => updates(req).await,
-        _ => not_found(),
-    }
-}
-
-async fn db(req: &mut WebRequest<'_, State>) -> HandleResult {
-    match req.state().client().get_world().await {
-        Ok(ref world) => json_response(req, world),
-        Err(_) => internal(),
-    }
-}
-
-async fn fortunes(req: &mut WebRequest<'_, State>) -> HandleResult {
-    match _fortunes(req.state().client()).await {
-        Ok(body) => {
-            let mut res = req.as_response(body);
-
-            res.headers_mut().append(SERVER, util::SERVER_HEADER_VALUE);
-            res.headers_mut()
-                .append(CONTENT_TYPE, util::HTML_HEADER_VALUE);
-
-            Ok(res)
-        }
-        Err(_) => internal(),
-    }
-}
-
-async fn queries(req: &mut WebRequest<'_, State>) -> HandleResult {
-    let num = req.request_mut().uri().query().parse_query();
-
-    match req.state().client().get_worlds(num).await {
-        Ok(worlds) => json_response(req, worlds.as_slice()),
-        Err(_) => internal(),
-    }
-}
-
-async fn updates(req: &mut WebRequest<'_, State>) -> HandleResult {
-    let num = req.request_mut().uri().query().parse_query();
-
-    match req.state().client().update(num).await {
-        Ok(worlds) => json_response(req, worlds.as_slice()),
-        Err(_) => internal(),
-    }
-}
-
-#[inline]
-async fn _fortunes(client: &Client) -> Result<Bytes, Box<dyn Error>> {
-    use sailfish::TemplateOnce;
-    let fortunes = client.tell_fortune().await?.render_once()?;
-    Ok(fortunes.into())
+fn json_response<Ext>(req: Request<Ext>, val: &impl serde_core::Serialize) -> HandleResult<Response> {
+    let buf = ser::json_serialize(val)?;
+    let mut res = req.into_response(Bytes::from(buf));
+    res.headers_mut().insert(CONTENT_TYPE, JSON);
+    Ok(res)
 }

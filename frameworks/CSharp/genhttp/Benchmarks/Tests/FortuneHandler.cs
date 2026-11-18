@@ -1,117 +1,106 @@
-﻿using System.Collections.Generic;
-using System.Threading.Tasks;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Web;
+using Benchmarks.Model;
 
-using Microsoft.EntityFrameworkCore;
+using Cottle;
 
 using GenHTTP.Api.Content;
-using GenHTTP.Api.Content.Templating;
 using GenHTTP.Api.Protocol;
 
 using GenHTTP.Modules.IO;
-using GenHTTP.Modules.Razor;
+using GenHTTP.Modules.Pages;
 
-using Benchmarks.Model;
+namespace Benchmarks.Tests;
 
-namespace Benchmarks.Tests
+public class FortuneHandler : IHandler
 {
+    private IDocument _template;
 
-    #region Factory
+    #region Functionality
 
-    public class FortuneHandlerBuilder : IHandlerBuilder
+    public async ValueTask PrepareAsync()
     {
+        var resource = Resource.FromAssembly("Template.html").Build();
 
-        public IHandler Build(IHandler parent)
-        {
-            return new FortuneHandler(parent);
-        }
-
+        using var reader = new StreamReader(await resource.GetContentAsync());
+        
+        _template = Document.CreateDefault(reader).DocumentOrThrow;
     }
 
+    public async ValueTask<IResponse> HandleAsync(IRequest request)
+    {
+        if (_template == null)
+        {
+            await PrepareAsync();
+        }
+        
+        var template = _template ?? throw new InvalidOperationException("Template has not been initialized");
+        
+        var fortunes = await GetFortunes();
+        
+        var context = BuildContext(fortunes);
+
+        var content = template.Render(context);
+
+        return request.GetPage(content).Build();
+    }
+
+    private static async Task<List<Fortune>> GetFortunes()
+    {
+        var fortunes = await QueryDatabaseAsync();
+        
+        fortunes.Add(new() { Id = 0, Message = "Additional fortune added at request time." });
+        
+        fortunes.Sort((x, y) => string.CompareOrdinal(x.Message, y.Message));
+        
+        return fortunes;
+    }
+
+    private static async Task<List<Fortune>> QueryDatabaseAsync()
+    {
+        await using var connection = await Database.DataSource.OpenConnectionAsync();
+
+        await using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT id, message FROM fortune";
+        
+        var result = new List<Fortune>(16);
+        
+        await using var reader = await command.ExecuteReaderAsync();
+        
+        while (await reader.ReadAsync())
+        {
+            result.Add(new ()
+            {
+                Id = reader.GetInt32(0),
+                Message = HttpUtility.HtmlEncode(reader.GetString(1))
+            });
+        }
+
+        return result;
+    }
+
+    private static IContext BuildContext(List<Fortune> cookies)
+    {
+        var values = new Value[cookies.Count];
+        
+        for (var i = 0; i < cookies.Count; i++)
+        {
+            values[i] = Value.FromMap(new FortuneMap(cookies[i].Id, cookies[i].Message));
+        }
+        
+        var store = new Dictionary<Value, Value>
+        {
+            ["cookies"] = Value.FromEnumerable(values.ToArray())
+        };
+        
+        return Context.CreateBuiltin(store);
+    }
+    
     #endregion
-
-    #region Supporting data structures
-
-    public sealed class FortuneModel : PageModel
-    {
-
-        public List<Fortune> Cookies { get; }
-
-        public FortuneModel(IRequest request, IHandler handler, List<Fortune> cookies) : base(request, handler)
-        {
-            Cookies = cookies;
-        }
-
-    }
-
-    #endregion
-
-    public class FortuneHandler : IHandler, IPageRenderer
-    {
-        private static readonly FlexibleContentType CONTENT_TYPE = new FlexibleContentType("text/html; charset=utf-8");
-
-        #region Get-/Setters
-
-        public IHandler Parent { get; }
-
-        private IHandler Page { get; }
-
-        private IRenderer<TemplateModel> Template { get; }
-
-        #endregion
-
-        #region Initialization
-
-        public FortuneHandler(IHandler parent)
-        {
-            Parent = parent;
-
-            Page = ModRazor.Page(Resource.FromAssembly("Fortunes.html"), (r, h) => GetFortunes(r, h))
-                           .Title("Fortunes")
-                           .AddAssemblyReference<HttpUtility>()
-                           .AddUsing("System.Web")
-                           .Build(this);
-
-            Template = ModRazor.Template<TemplateModel>(Resource.FromAssembly("Template.html")).Build();
-        }
-
-        #endregion
-
-        #region Functionality
-
-        public ValueTask<IResponse> HandleAsync(IRequest request) => Page.HandleAsync(request);
-
-        public IEnumerable<ContentElement> GetContent(IRequest request) => Enumerable.Empty<ContentElement>();
-
-        public async ValueTask<IResponseBuilder> RenderAsync(TemplateModel model)
-        {
-            return model.Request.Respond()
-                                .Content(await Template.RenderAsync(model))
-                                .Type(CONTENT_TYPE);
-        }
-
-        private async ValueTask<FortuneModel> GetFortunes(IRequest request, IHandler handler)
-        {
-            using var context = DatabaseContext.CreateNoTracking();
-
-            var fortunes = await context.Fortune.ToListAsync().ConfigureAwait(false);
-
-            fortunes.Add(new Fortune() { Message = "Additional fortune added at request time." });
-
-            fortunes.Sort();
-
-            return new FortuneModel(request, handler, fortunes);
-        }
-
-        public async ValueTask PrepareAsync()
-        {
-            await Page.PrepareAsync();
-            await Template.PrepareAsync();
-        }
-
-        #endregion
-
-    }
-
+    
 }

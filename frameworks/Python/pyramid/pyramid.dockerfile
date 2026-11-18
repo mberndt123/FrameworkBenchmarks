@@ -1,10 +1,10 @@
-FROM python:3.6.6-stretch
+FROM python:3.14
 
-ADD ./ /pyramid
-
-WORKDIR /pyramid
+ADD ./requirements.txt /pyramid/requirements.txt
 
 RUN pip3 install -r /pyramid/requirements.txt
+ADD ./ /pyramid
+WORKDIR /pyramid
 
 EXPOSE 8080
 

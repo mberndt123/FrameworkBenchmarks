@@ -22,7 +22,7 @@ type JsonStructMessage = { message : string }
 type Fortune = { id: int; message: string }
 
 [<Literal>]
-let ConnectionString = "Server=tfb-database;Database=hello_world;User Id=benchmarkdbuser;Password=benchmarkdbpass;Maximum Pool Size=1024;NoResetOnClose=true;Enlist=false;Max Auto Prepare=3"
+let ConnectionString = "Server=tfb-database;Database=hello_world;User Id=benchmarkdbuser;Password=benchmarkdbpass;SSL Mode=Disable;Maximum Pool Size=1024;NoResetOnClose=true;Enlist=false;Max Auto Prepare=4;Multiplexing=true;Write Coalescing Buffer Threshold Bytes=1000"
 
 
 module Simple =
@@ -73,7 +73,6 @@ module View =
             ]
         ] |> compileDoc
 
-    let extra = { id = 0; message = "Additional fortune added at request time." }
     let FortuneComparer = { new IComparer<Fortune> with
         member self.Compare(a,b) = String.CompareOrdinal(a.message, b.message)
 }
@@ -98,7 +97,7 @@ let main args =
 
                 let fortunes =
                     let xs = data.AsList()
-                    xs.Add View.extra
+                    xs.Add { id = 0; message = "Additional fortune added at request time." }
                     xs.Sort View.FortuneComparer
                     xs
 

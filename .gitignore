@@ -1,9 +1,7 @@
-.DS_Store
 installs
-*.log
 node_modules/
 .travis.bak
-
+t.bat
 # Added for pedestal framework test
 .lein-deps-sum
 
@@ -35,6 +33,7 @@ build/
 *.patch
 */bin/
 
+
 # intellij
 *.iml
 *.ipr
@@ -59,9 +58,15 @@ benchmark.cfg
 
 # Visual Studio Code
 .vscode
+.history/
+.devcontainer
 
 # vim
 .*.sw[a-p]
 
 # merge tooling
 *.orig
+
+# python
+.venv/
+frameworks/CSharp/akazawayun.pro/Dockerfile

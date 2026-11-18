@@ -1,36 +1,17 @@
-# Codeigniter PHP Benchmarking Test
+# Codeigniter Benchmarking Test
 
-This is the Codeigniter PHP portion of a [benchmarking test suite](../) comparing a variety of web development platforms.
+This is the Codeigniter portion of a [benchmarking test suite](../../../) comparing a variety of web development platforms.
 
-### JSON Encoding Test
-Uses the PHP standard [JSON encoder](http://www.php.net/manual/en/function.json-encode.php).
+### Plaintext and JSON Encoding Test
 
-* [JSON test controller](application/controllers/bench.php)
-
+Implemented as functions right in [app/Config/Routes.php](app/Config/Routes.php).
 
 ### Data-Store/Database Mapping Test
-Uses the db abstraction class from Codeigniter
 
-* [DB test controller](application/controllers/bench.php)
-
-
-## Infrastructure Software Versions
-The tests were run with:
-
-* [Codeigniter Version 3.1.11](http://ellislab.com/codeigniter)
-* [PHP Version 7.4](http://www.php.net/) with FPM and APC
-* [nginx 1.16.1](http://nginx.org/)
-* [MySQL 8](https://dev.mysql.com/)
+Implemented in two variants:
+- ORM based in file [app/Controllers/Full.php](app/Controllers/Full.php)
+- Plain SQL based in file [app/Controllers/Raw.php](app/Controllers/Raw.php)
 
 ## Test URLs
-### JSON Encoding Test
 
-http://localhost/index.php/bench/json
-
-### Data-Store/Database Mapping Test
-
-http://localhost/index.php/bench/db
-
-### Variable Query Test
-    
-http://localhost/index.php/bench/db/2
+See [benchmark_config.json](benchmark_config.json) for mapping tests to URLs.

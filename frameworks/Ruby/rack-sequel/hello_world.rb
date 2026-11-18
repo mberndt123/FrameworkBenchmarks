@@ -1,20 +1,31 @@
 # frozen_string_literal: true
+require 'bundler/setup'
+Bundler.require(:default) # Load core modules
+
+require_relative 'db'
+require 'time'
 
 # Our Rack application to be executed by rackup
 class HelloWorld
-  DEFAULT_HEADERS = {}.tap do |h|
-    h['Server'] = SERVER_STRING if SERVER_STRING
+  MAX_PK = 10_000
+  ID_RANGE = (1..10_000).freeze
+  ALL_IDS = ID_RANGE.to_a
+  QUERIES_MIN = 1
+  QUERIES_MAX = 500
 
-    h.freeze
-  end
+  CONTENT_TYPE = 'Content-Type'
+  JSON_TYPE = 'application/json'
+  HTML_TYPE = 'text/html; charset=utf-8'
+  PLAINTEXT_TYPE = 'text/plain'
+  DATE = 'Date'
+  SERVER = 'Server'
+  SERVER_STRING = "Rack"
 
   def bounded_queries(env)
     params = Rack::Utils.parse_query(env['QUERY_STRING'])
 
     queries = params['queries'].to_i
-    return QUERIES_MIN if queries < QUERIES_MIN
-    return QUERIES_MAX if queries > QUERIES_MAX
-    queries
+    queries.clamp(QUERIES_MIN, QUERIES_MAX)
   end
 
   # Return a random number between 1 and MAX_PK
@@ -22,102 +33,123 @@ class HelloWorld
     rand(MAX_PK).succ
   end
 
-  WORLD_BY_ID = World.naked.where(:id=>:$id).prepare(:first, :world_by_id)
-  WORLD_UPDATE = World.where(:id=>:$id).prepare(:update, :world_update, :randomnumber=>:$randomnumber)
-
   def db
-    WORLD_BY_ID.(:id=>rand1)
+    World.with_pk(rand1).values
   end
 
   def queries(env)
+    ids = ALL_IDS.sample(bounded_queries(env))
     DB.synchronize do
-      Array.new(bounded_queries(env)) do
-        WORLD_BY_ID.(:id=>rand1)
+      ids.map do |id|
+        World.with_pk(id).values
       end
     end
   end
 
   def fortunes
     fortunes = Fortune.all
-    fortunes << Fortune.new(
-      :id=>0,
-      :message=>'Additional fortune added at request time.'
-    )
+
+    fortune = Fortune.new
+    fortune.id = 0
+    fortune.message = -"Additional fortune added at request time."
+    fortunes << fortune
+
     fortunes.sort_by!(&:message)
 
     html = String.new(<<~'HTML')
       <!DOCTYPE html>
       <html>
-      <head>
-        <title>Fortunes</title>
-      </head>
-
+        <head>
+          <title>Fortunes</title>
+        </head>
       <body>
-
-      <table>
-      <tr>
-        <th>id</th>
-        <th>message</th>
-      </tr>
+        <table>
+          <tr>
+            <th>id</th>
+            <th>message</th>
+          </tr>
     HTML
 
     fortunes.each do |fortune|
       html << <<~"HTML"
       <tr>
         <td>#{fortune.id}</td>
-        <td>#{Rack::Utils.escape_html(fortune.message)}</td>
+        <td>#{ERB::Escape.html_escape(fortune.message)}</td>
       </tr>
       HTML
     end
 
     html << <<~'HTML'
       </table>
-
       </body>
       </html>
     HTML
   end
 
   def updates(env)
+    worlds = []
+    ids = ALL_IDS.sample(bounded_queries(env))
     DB.synchronize do
-      Array.new(bounded_queries(env)) do
-        world = WORLD_BY_ID.(:id=>rand1)
-        WORLD_UPDATE.(:id=>world[:id], :randomnumber=>(world[:randomnumber] = rand1))
-        world
-      end
+      worlds =
+        ids.map do |id|
+          world = World.with_pk(id)
+          new_value = rand1
+          new_value = rand1 while new_value == world.randomnumber
+          world.randomnumber = new_value
+          world
+        end
+      World.batch_update(worlds)
     end
+    worlds.map!(&:values)
   end
 
   def call(env)
-    content_type, *body =
-      case env['PATH_INFO']
-      when '/json'
-        # Test type 1: JSON serialization
-        ['application/json', JSON.fast_generate(:message=>'Hello, World!')]
-      when '/db'
-        # Test type 2: Single database query
-        ['application/json', JSON.fast_generate(db)]
-      when '/queries'
-        # Test type 3: Multiple database queries
-        ['application/json', JSON.fast_generate(queries(env))]
-      when '/fortunes'
-        # Test type 4: Fortunes
-        ['text/html; charset=utf-8', fortunes]
-      when '/updates'
-        # Test type 5: Database updates
-        ['application/json', JSON.fast_generate(updates(env))]
-      when '/plaintext'
-        # Test type 6: Plaintext
-        ['text/plain', 'Hello, World!']
-      end
+    case env['PATH_INFO']
+    when '/json'
+      # Test type 1: JSON serialization
+      respond JSON_TYPE, JSON.generate({ message: -'Hello, World!' })
+    when '/db'
+      # Test type 2: Single database query
+      respond JSON_TYPE, JSON.generate(db)
+    when '/queries'
+      # Test type 3: Multiple database queries
+      respond JSON_TYPE, JSON.generate(queries(env))
+    when '/fortunes'
+      # Test type 4: Fortunes
+      respond HTML_TYPE, fortunes
+    when '/updates'
+      # Test type 5: Database updates
+      respond JSON_TYPE, JSON.generate(updates(env))
+    when '/plaintext'
+      # Test type 6: Plaintext
+      respond PLAINTEXT_TYPE, -'Hello, World!'
+    end
+  end
 
+  private
+
+  def respond(content_type, body)
     [
       200,
-      DEFAULT_HEADERS.merge(
-        'Content-Type'=>content_type,
-        'Date'=>Time.now.httpdate
-      ),
-      body
+      headers(content_type),
+      [body]
     ]
+  end
+
+  if defined?(Puma)
+    def headers(content_type)
+      {
+        CONTENT_TYPE => content_type,
+        SERVER => SERVER_STRING,
+        DATE => Time.now.httpdate
+      }
+    end
+  else
+    def headers(content_type)
+      {
+        CONTENT_TYPE => content_type,
+        SERVER => SERVER_STRING
+      }
+    end
   end
 end

@@ -4,8 +4,8 @@
       {
          "default": {
             "plaintext_url": "/plaintext",
-            "port": 8089,
-            "approach": "Realistic",
+            "port": 8080,
+            "approach": "Stripped",
             "classification": "Platform",
             "database": "None",
             "framework": "faf",

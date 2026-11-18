@@ -3,82 +3,117 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
-
 using Benchmarks.Model;
 
 using GenHTTP.Modules.Webservices;
 
-namespace Benchmarks.Tests
+using Microsoft.Extensions.Caching.Memory;
+
+using Npgsql;
+
+namespace Benchmarks.Tests;
+
+public sealed class CacheResource
 {
-
-    public sealed class CacheResource
+    private static readonly MemoryCache Cache = new(new MemoryCacheOptions
     {
-        private static readonly Random _Random = new Random();
+        ExpirationScanFrequency = TimeSpan.FromMinutes(60)
+    });
 
-        private readonly MemoryCache _Cache = new MemoryCache(new MemoryCacheOptions() { ExpirationScanFrequency = TimeSpan.FromMinutes(60) });
+    private static readonly CacheKey[] CacheKeys = Enumerable.Range(0, 10001).Select(i => new CacheKey(i)).ToArray();
 
-        private static readonly object[] _CacheKeys = Enumerable.Range(0, 10001).Select((i) => new CacheKey(i)).ToArray();
+    [ResourceMethod(":queries")]
+    public ValueTask<List<World>> GetWorldsFromPath(string queries) => GetWorlds(queries);
 
-        public sealed class CacheKey : IEquatable<CacheKey>
+    [ResourceMethod]
+    public async ValueTask<List<World>> GetWorlds(string queries)
+    {
+        if (!int.TryParse(queries, out var count))
         {
-            private readonly int _value;
-
-            public CacheKey(int value) => _value = value;
-
-            public bool Equals(CacheKey key) => key._value == _value;
-
-            public override bool Equals(object obj) => ReferenceEquals(obj, this);
-
-            public override int GetHashCode() => _value;
-
-            public override string ToString() => _value.ToString();
-
+            count = 1;
         }
 
-        [ResourceMethod(":queries")]
-        public ValueTask<List<World>> GetWorldsFromPath(string queries) => GetWorlds(queries);
-
-        [ResourceMethod]
-        public async ValueTask<List<World>> GetWorlds(string queries)
+        if (count < 1)
         {
-            var count = 1;
+            count = 1;
+        }
+        else if (count > 500)
+        {
+            count = 500;
+        }
 
-            int.TryParse(queries, out count);
+        NpgsqlConnection connection = null;
 
-            if (count < 1) count = 1;
-            else if (count > 500) count = 500;
+        var result = new List<World>(count);
 
-            var result = new List<World>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var id = Random.Shared.Next(1, 10001);
 
-            using var context = DatabaseContext.CreateNoTracking();
+            var key = CacheKeys[id];
 
-            for (var i = 0; i < count; i++)
+            var data = Cache.Get<World>(key);
+
+            if (data != null)
             {
-                var id = _Random.Next(1, 10001);
-
-                var key = _CacheKeys[id];
-
-                var data = _Cache.Get<World>(key);
-
-                if (data != null)
-                {
-                    result.Add(data);
-                }
-                else
-                {
-                    var resolved = await context.World.FirstOrDefaultAsync(w => w.Id == id).ConfigureAwait(false);
-
-                    _Cache.Set(key, resolved);
-
-                    result.Add(resolved);
-                }
+                result.Add(data);
             }
+            else
+            {
+                if (connection == null)
+                {
+                    connection = await Database.DataSource.OpenConnectionAsync();
+                }
 
-            return result;
+                var resolved = await GetWorldById(connection, id);
+
+                Cache.Set(key, resolved);
+
+                result.Add(resolved);
+            }
         }
 
+        return result;
+    }
+
+    private static async Task<World> GetWorldById(NpgsqlConnection connection, int id)
+    {
+        await using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT id, randomnumber FROM world WHERE id = @Id";
+
+        command.Parameters.AddWithValue("@Id", id);
+
+        await using var reader = await command.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
+        {
+            return new()
+            {
+                Id = reader.GetInt32(0),
+                RandomNumber = reader.GetInt32(1)
+            };
+        }
+
+        return null;
+    }
+
+    public sealed class CacheKey : IEquatable<CacheKey>
+    {
+        private readonly int _value;
+
+        public CacheKey(int value)
+        {
+            _value = value;
+        }
+
+        public bool Equals(CacheKey key) => key._value == _value;
+
+        public override bool Equals(object obj) => ReferenceEquals(obj, this);
+
+        public override int GetHashCode() => _value;
+
+        public override string ToString() => _value.ToString();
     }
 
 }

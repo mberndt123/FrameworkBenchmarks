@@ -1,8 +1,8 @@
-FROM perl:5.26
+FROM perl:5.42
 
 WORKDIR /mojo
 
-ADD ./cpanfile* ./
+COPY cpanfile* .
 
 ENV PERL_CARTON_PATH=/mojo/local
 ENV PERL5LIB=${PERL_CARTON_PATH}/lib/perl5
@@ -14,7 +14,7 @@ RUN carton install --cpanfile /mojo/cpanfile
 
 ENV LIBEV_FLAGS=7
 
-ADD ./app.pl ./
+COPY app.pl .
 
 EXPOSE 8080
 

@@ -1,13 +1,19 @@
-FROM golang:1.15
+FROM golang:1.25.6-alpine as builder
 
 WORKDIR /fiber
 
-COPY ./src /fiber
+COPY ./fiber-v3 /fiber
 
-RUN go get github.com/valyala/quicktemplate/qtc
+RUN go mod download && \
+    go install github.com/valyala/quicktemplate/qtc@latest && \
+    qtc && \
+    GOAMD64=v3 go build -ldflags="-s -w" -o app .
 
-RUN go generate ./templates
-RUN go build -ldflags="-s -w" -o app .
+FROM alpine:latest
+
+WORKDIR /fiber
+
+COPY --from=builder /fiber/app .
 
 EXPOSE 8080
 

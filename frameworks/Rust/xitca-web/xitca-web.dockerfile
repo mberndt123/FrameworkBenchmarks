@@ -1,11 +1,13 @@
-FROM rust:1.53
+FROM rust:1.93
 
 ADD ./ /xitca-web
 WORKDIR /xitca-web
 
-RUN cargo clean
-RUN rustup default nightly-2021-08-03
-RUN RUSTFLAGS="-C target-cpu=native" cargo build --release --bin xitca-web
+# for official run
+# RUN cargo build --release --bin xitca-web --features io-uring,pg,router,template,zero-copy,json
+
+# for continuous run
+RUN cargo build --release --bin xitca-web --features io-uring,pg,router,template,zero-copy,perf-json,perf-allocator
 
 EXPOSE 8080
 

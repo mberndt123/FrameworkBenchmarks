@@ -2,46 +2,69 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-using Microsoft.EntityFrameworkCore;
-
 using Benchmarks.Model;
 
 using GenHTTP.Modules.Webservices;
 
-namespace Benchmarks.Tests
+using NpgsqlTypes;
+
+namespace Benchmarks.Tests;
+
+public sealed class QueryResource
 {
 
-    public sealed class QueryResource
+    [ResourceMethod(":queries")]
+    public Task<List<World>> GetWorldsFromPath(string queries) => GetWorlds(queries);
+
+    [ResourceMethod]
+    public Task<List<World>> GetWorlds(string queries)
     {
-        private static Random _Random = new Random();
-
-        [ResourceMethod(":queries")]
-        public ValueTask<List<World>> GetWorldsFromPath(string queries) => GetWorlds(queries);
-
-        [ResourceMethod]
-        public async ValueTask<List<World>> GetWorlds(string queries)
+        if (!int.TryParse(queries, out var count))
         {
-            var count = 1;
-
-            int.TryParse(queries, out count);
-
-            if (count < 1) count = 1;
-            else if (count > 500) count = 500;
-
-            var result = new List<World>(count);
-
-            using var context = DatabaseContext.CreateNoTracking();
-
-            for (int _ = 0; _ < count; _++)
-            {
-                var id = _Random.Next(1, 10001);
-
-                result.Add(await context.World.FirstOrDefaultAsync(w => w.Id == id).ConfigureAwait(false));
-            }
-
-            return result;
+            count = 1;
         }
 
+        if (count < 1)
+        {
+            count = 1;
+        }
+        else if (count > 500)
+        {
+            count = 500;
+        }
+
+        return GetRandomWorlds(count);
+    }
+
+    private static async Task<List<World>> GetRandomWorlds(int count)
+    {
+        var result = new List<World>(count);
+
+        await using var connection = await Database.DataSource.OpenConnectionAsync();
+
+        await using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT id, randomnumber FROM world WHERE id = @Id";
+
+        var parameter = command.Parameters.Add("@Id", NpgsqlDbType.Integer);
+
+        for (var i = 0; i < count; i++)
+        {
+            parameter.Value = Random.Shared.Next(1, 10001);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            if (await reader.ReadAsync())
+            {
+                result.Add(new()
+                {
+                    Id = reader.GetInt32(0),
+                    RandomNumber = reader.GetInt32(1)
+                });
+            }
+        }
+        
+        return result;
     }
 
 }

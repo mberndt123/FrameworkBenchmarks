@@ -1,29 +1,36 @@
-﻿using System;
-using System.Threading.Tasks;
-
-using Microsoft.EntityFrameworkCore;
-
+﻿using Benchmarks.Model;
 using GenHTTP.Modules.Webservices;
 
-using Benchmarks.Model;
+namespace Benchmarks.Tests;
 
-namespace Benchmarks.Tests
+public sealed class DbResource
 {
 
-    public sealed class DbResource
+    [ResourceMethod]
+    public Task<World> GetRandomWorld() => GetWorldById(Random.Shared.Next(1, 10001));
+
+    private static async Task<World> GetWorldById(int id)
     {
-        private static Random _Random = new Random();
+        await using var connection = await Database.DataSource.OpenConnectionAsync();
 
-        [ResourceMethod]
-        public async ValueTask<World> GetRandomWorld()
+        await using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT id, randomnumber FROM world WHERE id = @Id";
+
+        command.Parameters.AddWithValue("@Id", id);
+
+        await using var reader = await command.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
         {
-            var id = _Random.Next(1, 10001);
-
-            using var context = DatabaseContext.CreateNoTracking();
-
-            return await context.World.FirstOrDefaultAsync(w => w.Id == id).ConfigureAwait(false);
+            return new()
+            {
+                Id = reader.GetInt32(0),
+                RandomNumber = reader.GetInt32(1)
+            };
         }
 
+        return null;
     }
 
 }

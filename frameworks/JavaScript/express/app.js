@@ -7,36 +7,47 @@ const cluster = require('cluster'),
   numCPUs = require('os').cpus().length,
   express = require('express');
 
-const bodyParser = require('body-parser');
+const {
+  jsonSerializer,
+  GREETING,
+} = require("./src/utils.mjs");
 
-if (cluster.isMaster) {
+
+if (cluster.isPrimary) {
+  console.log(`Primary ${process.pid} is running`);
+
   // Fork workers.
   for (let i = 0; i < numCPUs; i++) {
     cluster.fork();
   }
 
-  cluster.on('exit', (worker, code, signal) =>
-    console.log('worker ' + worker.pid + ' died'));
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`worker ${worker.process.pid} died`);
+  });
 } else {
   const app = module.exports = express();
 
-  // Configuration
-  app.use(bodyParser.urlencoded({ extended: true }));
-
-  // Set headers for all routes
-  app.use((req, res, next) => {
-    res.setHeader("Server", "Express");
-    return next();
-  });
-
-  app.set('view engine', 'jade');
-  app.set('views', __dirname + '/views');
+  app.set('x-powered-by', false);
+  app.set('etag', false);
 
   // Routes
-  app.get('/json', (req, res) => res.send({ message: 'Hello, World!' }));
+  app.get('/json', (req, res) => {
+    res.writeHead(200, {
+      "content-type": "application/json",
+      server: "Express",
+    }).end(jsonSerializer({ message: GREETING }))
+  });
 
-  app.get('/plaintext', (req, res) =>
-    res.header('Content-Type', 'text/plain').send('Hello, World!'));
+  app.get('/plaintext', (req, res) => {
+    res.writeHead(200, {
+      "content-type": "text/plain",
+      server: "Express",
+    }).end(GREETING);
+  });
 
-  app.listen(8080);
+  const server = app.listen(8080);
+  server.keepAliveTimeout = 0;
+  server.headersTimeout = 0;
+  server.requestTimeout = 0;
+  server.maxConnections = Infinity;
 }

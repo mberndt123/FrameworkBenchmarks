@@ -1,20 +1,53 @@
-FROM ruby:2.6
+ARG UBUNTU_VERSION=26.04
 
-ADD ./h2o.conf ./
+ARG H2O_PREFIX=/opt/h2o
 
-RUN apt-get update && apt-get install -yqq bison cmake libssl-dev make
+FROM "buildpack-deps:${UBUNTU_VERSION}" AS compile
 
-ENV H2O_VERSION=2.3.0-beta2
-ENV H2O_ARCHIVE="v${H2O_VERSION}.tar.gz"
-ENV H2O_HOME=/h2o
+ARG H2O_VERSION=ccea64b17ade832753db933658047ede9f31a380
 
-RUN wget -q "https://github.com/h2o/h2o/archive/$H2O_ARCHIVE" && \
-    tar xf "$H2O_ARCHIVE" && \
-    cd "h2o-$H2O_VERSION" && \
-    cmake -DCMAKE_INSTALL_PREFIX="$H2O_HOME" -DCMAKE_C_FLAGS="-flto -march=native" \
-          -DCMAKE_AR=/usr/bin/gcc-ar -DCMAKE_RANLIB=/usr/bin/gcc-ranlib -DWITH_MRUBY=on . && \
-    make -j "$(nproc)" install
+ARG DEBIAN_FRONTEND=noninteractive
+ARG H2O_PREFIX
+WORKDIR /tmp/h2o-build
+RUN apt-get install \
+      --no-install-recommends \
+      -qqUy \
+      cmake \
+      curl \
+      g++ \
+      libbrotli-dev \
+      libcap-dev \
+      libssl-dev \
+      liburing-dev \
+      libuv1-dev \
+      libz-dev \
+      make \
+      pkg-config \
+      ruby \
+      systemtap-sdt-dev > /dev/null && \
+    curl -LSs "https://github.com/h2o/h2o/archive/${H2O_VERSION}.tar.gz" | \
+      tar --strip-components=1 -xz > /dev/null && \
+    cmake \
+      -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_FLAGS="-flto=auto -march=native -mtune=native" \
+      -DCMAKE_INSTALL_PREFIX="${H2O_PREFIX}" \
+      -DWITH_MRUBY=on \
+      -S . > /dev/null && \
+    cmake --build build -j > /dev/null && \
+    cmake --install build > /dev/null
 
+FROM "ubuntu:${UBUNTU_VERSION}"
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get install --no-install-recommends -qqUy liburing2
+ARG H2O_PREFIX
+COPY --from=compile "${H2O_PREFIX}/bin/h2o" "${H2O_PREFIX}/bin/"
+COPY --from=compile "${H2O_PREFIX}/share" "${H2O_PREFIX}/share/"
+COPY h2o.conf "${H2O_PREFIX}/etc/"
 EXPOSE 8080
+ARG BENCHMARK_ENV
+ARG TFB_TEST_DATABASE
+ARG TFB_TEST_NAME
 
-CMD "${H2O_HOME}/bin/h2o" -c h2o.conf
+CMD ["/opt/h2o/bin/h2o", "-c", "/opt/h2o/etc/h2o.conf"]
